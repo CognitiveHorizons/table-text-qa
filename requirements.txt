@@ -71,7 +71,7 @@ torchsampler @ https://github.com/ufoym/imbalanced-dataset-sampler/archive/maste
 torchvision==0.9.1+cu111
 tqdm==4.55.0
 traitlets==4.3.3
-transformers==2.11.0
+transformers==4.5.0
 typing-extensions==3.7.4.3
 tzlocal==2.1
 urllib3==1.26.2
