@@ -39,6 +39,7 @@ from torch.utils.data import TensorDataset
 #from transformers import LongformerModel, LongformerTokenizer
 #from transformers import AutoTokenizer, AutoModelForQuestionAnswering
 from transformers import LongformerForQuestionAnswering, LongformerTokenizerFast,LongformerTokenizer, EvalPrediction, LongformerConfig
+from transformers import RobertaForQuestionAnswering, RobertaTokenizerFast,RobertaTokenizer,RobertaConfig
 
  
 from transformers import (WEIGHTS_NAME, AdamW, BertConfig, BertTokenizer, 
@@ -48,6 +49,7 @@ from transformers.data.metrics.squad_metrics import (
     compute_predictions_log_probs,
     compute_predictions_logits,
 )
+# from compute_predictions_logits import compute_predictions_logits
 import string
 from transformers.data.processors.utils import DataProcessor
 from utils.utils import readGZip
@@ -70,7 +72,9 @@ logger = logging.getLogger(__name__)
 
 
 #MODEL_CLASSES = {"bert": (BertConfig, BertForQuestionAnswering, BertTokenizer)}
-MODEL_CLASSES = {"bert": (BertConfig, LongformerForQuestionAnswering, LongformerTokenizer),"longformer":(LongformerConfig,LongformerForQuestionAnswering, LongformerTokenizer)}
+MODEL_CLASSES = {"bert": (BertConfig, BertForQuestionAnswering, BertTokenizer)
+            ,"longformer":(LongformerConfig, LongformerForQuestionAnswering, LongformerTokenizer)
+            ,"roberta":(RobertaConfig, RobertaForQuestionAnswering, RobertaTokenizer)}
 
 
 def squad_convert_example_to_features_init(tokenizer_for_convert):
@@ -587,6 +591,7 @@ def train(args, train_dataset, model, tokenizer):
     return global_step, tr_loss / global_step
 
 def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
+    prefix = args.prefix
     processor = SquadProcessor()
     examples = processor._create_examples(inputs, 'dev')
 
@@ -645,7 +650,7 @@ def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
             #end_logits = [to_list(out[i]) for out in outputs.end_logits]
             #start_logits, end_logits = output
             result = SquadResult(unique_id, outputs.start_logits[i,:].tolist(), outputs.end_logits[i,:].tolist())
-
+            # print(outputs.start_logits, "SEP", outputs.end_logits)
             all_results.append(result)
 
     evalTime = timeit.default_timer() - start_time
@@ -833,7 +838,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
                 str(args.max_seq_length),
             ),
         )
-
+    # print(cached_features_file)
         # Init features and dataset from cache if it exists
     if os.path.exists(cached_features_file) and not args.overwrite_cache:
         logger.info("Loading features from cached file %s", cached_features_file)
@@ -926,6 +931,7 @@ def main():
     )
 
     parser.add_argument("--pred_ans_file",default="predictions_lf.json",type=str)
+    parser.add_argument("--prefix",default="",type=str)
     parser.add_argument(
         "--cache_dir",
         default="/tmp/",
@@ -1052,7 +1058,7 @@ def main():
     args.n_gpu = torch.cuda.device_count()
 
     args.device = device
-    args.output_dir = os.path.join(args.output_dir, datetime.now().strftime('%Y_%m_%d_%H_%M_%S'))
+    # args.output_dir = os.path.join(args.output_dir, datetime.now().strftime('%Y_%m_%d_%H_%M_%S'))
     # Setup logging
     logging.basicConfig(
         format="%(asctime)s - %(levelname)s - %(name)s -   %(message)s",
@@ -1099,9 +1105,9 @@ def main():
     # Training
     if args.do_train:
         train_dataset = load_and_cache_examples(args, tokenizer, evaluate=False)
+        args.output_dir = os.path.join(args.output_dir, datetime.now().strftime('%Y_%m_%d_%H_%M_%S'))
         global_step, tr_loss = train(args, train_dataset, model, tokenizer)
         logger.info(" global_step = %s, average loss = %s", global_step, tr_loss)
-
     # Evaluation - we can ask to evaluate all the checkpoints (sub-directories) in a directory    
     if args.do_eval and args.local_rank in [-1, 0]:
         results = {}

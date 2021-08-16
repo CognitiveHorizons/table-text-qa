@@ -3,6 +3,32 @@ import re
 import collections
 import string
 import sys
+from sentence_transformers import SentenceTransformer, CrossEncoder, util
+import tqdm
+
+################################################################
+model_name = 'msmarco-distilbert-base-tas-b'
+doc_retriever = SentenceTransformer(model_name)
+
+def get_top_id(passages,query):
+    corpus_embeddings = doc_retriever.encode(passages, convert_to_tensor=True, show_progress_bar=False)
+    corpus_embeddings = util.normalize_embeddings(corpus_embeddings)
+    query_embeddings = doc_retriever.encode([query], convert_to_tensor=True)
+    query_embeddings = util.normalize_embeddings(query_embeddings)
+    hits = util.semantic_search(query_embeddings, corpus_embeddings, top_k=1)
+    return hits[0][0]['corpus_id']
+#################################################################
+import numpy as np
+p = json.load(open('/mnt/infonas/data/yashgupta/data/row_selector_output/qid_logits_bert_large_dev.json'))
+def get_rs_score(q_id, rank):
+    return np.sort(np.array(p[q_id]))[-5:][rank]
+
+q = json.load(open('/tmp/nbest_predictions_dev_top5.json'))
+def get_rc_score(q_id, rank):
+    nb = q[q_id+"_"+str(rank)][0]
+    return nb['start_logit'] + nb['end_logit']
+    # return np.log(nb['probability'])
+#################################################################
 
 def normalize_answer(s):
     """Lower text and remove punctuation, articles and extra whitespace."""
@@ -55,14 +81,56 @@ def get_raw_scores(examples, reference):
     """
     exact_scores = {}
     f1_scores = {}
-    
-    for example in examples:
-        qas_id = example['question_id']
+    rnk_scores = {}
+    eval_res = {}
+    # bst = set([])
+    # psgs = {}
+    # for ex in tqdm.tqdm(examples):
+    #     qid = ex['question_id'].split('_')[0]
+    #     if qid not in psgs.keys():
+    #         psgs[qid] = [ex['context']]
+    #     else:
+    #         psgs[qid].append(ex['context'])
+    #     if len(psgs[qid])==3:
+    #         bst.add(qid+"_"+str(get_top_id(psgs[qid], ex['question'])))
+
+    for example in tqdm.tqdm(examples):
+        qas_id = example['question_id'].split('_')[0]
+        qas_rank = int(example['question_id'].split('_')[1])
+        # rcs = get_rc_score(qas_id, qas_rank)
+        # rss = get_rs_score(qas_id, qas_rank)
+        ts = example['rerank_score'] #3.2*rss + rcs
+        # print(example['question_id'], ts)
         gold_answers = [reference['reference'][qas_id]]
 
         prediction = example['pred']
-        exact_scores[qas_id] = max(compute_exact(a, prediction) for a in gold_answers)
-        f1_scores[qas_id] = max(compute_f1(a, prediction) for a in gold_answers)
+
+        es = max(compute_exact(a, prediction) for a in gold_answers)
+        f1s = max(compute_f1(a, prediction) for a in gold_answers)
+        
+        eval_res[example['question_id']] = {}
+        eval_res[example['question_id']]['f1-score'] = f1s
+        eval_res[example['question_id']]['em-score'] = es
+        if qas_id not in rnk_scores.keys() or rnk_scores[qas_id] < ts:
+            rnk_scores[qas_id] = ts
+        else:
+            continue
+        # if example['question_id'] not in bst:
+        #     continue
+        # if qas_id not in f1_scores.keys():
+        #     f1_scores[qas_id] = 0
+        #     exact_scores[qas_id] = 0
+        # # print("original", prediction)
+        # for ex in examples:
+        #     if ex['pred'] == "":
+        #         continue
+        #     if ex['question_id'].split('_')[0] == qas_id:
+        #         if prediction == "" or len(ex['pred']) < len(prediction):
+        #             prediction = ex['pred']
+        # # print("best", prediction)
+
+        exact_scores[qas_id] = es
+        f1_scores[qas_id] =  f1s
 
     qid_list = reference['reference'].keys()
     total = len(qid_list)
@@ -72,10 +140,12 @@ def get_raw_scores(examples, reference):
     #TODO: What is table exact, passage exact scores ?
 
     ### For dev set, we know where the gold answer is coming from so we can compute table exact and passage exact
-
+    print("total scores", len(exact_scores))
+    with open('/tmp/dev_top5_scores.json', 'w') as f:
+        json.dump(eval_res, f, indent=2)
     return collections.OrderedDict(
         [
-            ("table exact", 100.0 * sum(exact_scores[k] for k in table_list) / len(table_list)),
+            ("table exact", 100.0 * sum([exact_scores[k] for k in table_list]) / len(table_list)),
             ("table f1", 100.0 * sum(f1_scores[k] for k in table_list) / len(table_list)),
             ("passage exact", 100.0 * sum(exact_scores[k] for k in passage_list) / len(passage_list)),
             ("passage f1", 100.0 * sum(f1_scores[k] for k in passage_list) / len(passage_list)),

@@ -2,7 +2,8 @@ import json
 
 
 #TODO: hardcoded resource path
-resource_path = "data/WikiTables-WithLinks/"
+import os
+resource_path = os.environ['DATA'] + "/data/WikiTables-WithLinks/"
 
 def load_data(table_id):
     with open('{}/request_tok/{}.json'.format(resource_path, table_id)) as f:

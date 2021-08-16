@@ -62,7 +62,7 @@ def preprocess_data(data_path,test):
 if __name__ == "__main__":
     rel_data_path = sys.argv[1]
     processed_data_path = sys.argv[2]
-    processed_data = preprocess_data(rel_data_path,True)
+    processed_data = preprocess_data(rel_data_path,False)
 
-    json.dump(processed_data,open(processed_data_path,"w"))
+    json.dump(processed_data,open(processed_data_path,"w"),indent=4)
 
