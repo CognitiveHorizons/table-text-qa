@@ -45,11 +45,7 @@ from transformers import RobertaForQuestionAnswering, RobertaTokenizerFast,Rober
 from transformers import (WEIGHTS_NAME, AdamW, BertConfig, BertTokenizer, 
                         BertForQuestionAnswering, get_linear_schedule_with_warmup)
 
-# from transformers.data.metrics.squad_metrics import (
-#     compute_predictions_log_probs,
-#     compute_predictions_logits,
-# )
-from squad_metrics import (
+from transformers.data.metrics.squad_metrics import (
     compute_predictions_log_probs,
     compute_predictions_logits,
 )
@@ -153,6 +149,7 @@ class SquadFeatures(object):
         self.start_position = start_position
         self.end_position = end_position
         self.is_impossible = is_impossible
+        # self.qas_id = qas_id
 
 class SquadResult(object):
     """
@@ -332,7 +329,7 @@ def squad_convert_example_to_features(example, max_seq_length, doc_stride, max_q
                 cls_index,
                 p_mask.tolist(),
                 example_index=0,  # Can not set unique_id and example_index here. They will be set after multiple processing.
-                unique_id=0,
+                unique_id=example.qas_id,
                 paragraph_len=span["paragraph_len"],
                 token_is_max_context=span["token_is_max_context"],
                 tokens=span["tokens"],
@@ -377,7 +374,9 @@ def squad_convert_examples_to_features(examples, tokenizer, max_seq_length, doc_
         if not example_features:
             continue
         for example_feature in example_features:
+            # print(example_feature.__dict__.keys(), example_feature.unique_id)
             example_feature.example_index = example_index
+            example_feature.qas_id = example_feature.unique_id
             example_feature.unique_id = unique_id
             new_features.append(example_feature)
             unique_id += 1
@@ -385,6 +384,7 @@ def squad_convert_examples_to_features(examples, tokenizer, max_seq_length, doc_
     features = new_features
     del new_features
 
+    # print(features[0].__dict__.keys(), features[0].qas_id)
     # Convert to Tensors and build dataset
     all_input_ids = torch.tensor([f.input_ids for f in features], dtype=torch.long)
     all_attention_masks = torch.tensor([f.attention_mask for f in features], dtype=torch.long)
@@ -392,6 +392,8 @@ def squad_convert_examples_to_features(examples, tokenizer, max_seq_length, doc_
     all_cls_index = torch.tensor([f.cls_index for f in features], dtype=torch.long)
     all_p_mask = torch.tensor([f.p_mask for f in features], dtype=torch.float)
     all_is_impossible = torch.tensor([f.is_impossible for f in features], dtype=torch.float)
+    print("STORING QS ID ALSO")
+    all_qas_id = torch.tensor([[ord(c) for c in f.qas_id+"0"*(25-len(f.qas_id))] for f in features])
 
     if not is_training:
         all_example_index = torch.arange(all_input_ids.size(0), dtype=torch.long)
@@ -410,6 +412,7 @@ def squad_convert_examples_to_features(examples, tokenizer, max_seq_length, doc_
             all_cls_index,
             all_p_mask,
             all_is_impossible,
+            all_qas_id
         )
 
     return features, dataset
@@ -434,6 +437,7 @@ def train(args, train_dataset, model, tokenizer):
 
     args.train_batch_size = args.per_gpu_train_batch_size * max(1, args.n_gpu)
     train_sampler = RandomSampler(train_dataset) if args.local_rank == -1 else DistributedSampler(train_dataset)
+    # print("DATASET",train_dataset[0])
     train_dataloader = DataLoader(train_dataset, sampler=train_sampler, batch_size=args.train_batch_size)
 
     t_total = len(train_dataloader) // args.gradient_accumulation_steps * args.num_train_epochs
@@ -521,6 +525,7 @@ def train(args, train_dataset, model, tokenizer):
 
     for epoch in train_iterator:
         epoch_iterator = tqdm(train_dataloader, desc="Iteration", disable=args.local_rank not in [-1, 0])
+        dct = {}
         for step, batch in enumerate(epoch_iterator):
 
             # Skip past any already trained steps if resuming training
@@ -539,20 +544,29 @@ def train(args, train_dataset, model, tokenizer):
                 "end_positions": batch[4],
             }
 
+            # print("BATCH", batch[3], batch[4])
+            # print("qas_id", "".join([chr(c.item()) for c in batch[8][0]]))
             outputs = model(**inputs)
             # model outputs are always tuple in transformers (see doc)
             loss = outputs[0]
-
+            # print("LOSS", loss)
+            qid = "".join([chr(c.item()) for c in batch[8][0]])
+            ls = loss.item()
+            dct[qid+'_loss'] = ls
+            # print("PRINTED LOSS", outputs)
+            dct[qid+'_st_log'] = outputs.start_logits[0, batch[3].item()].item()
+            dct[qid+'_en_log'] = outputs.start_logits[0, batch[4].item()].item()
+            dct[qid+'_final_score'] =  (dct[qid+'_en_log'] + dct[qid+'_st_log'])/2
             if args.n_gpu > 1:
                 loss = loss.mean()  # mean() to average on multi-gpu parallel (not distributed) training
             if args.gradient_accumulation_steps > 1:
                 loss = loss / args.gradient_accumulation_steps
 
-            if args.fp16:
-                with amp.scale_loss(loss, optimizer) as scaled_loss:
-                    scaled_loss.backward()
-            else:
-                loss.backward()
+            # if args.fp16:
+            #     with amp.scale_loss(loss, optimizer) as scaled_loss:
+            #         scaled_loss.backward()
+            # else:
+            #     loss.backward()
 
             tr_loss += loss.item()
             if (step + 1) % args.gradient_accumulation_steps == 0:
@@ -561,10 +575,10 @@ def train(args, train_dataset, model, tokenizer):
                 else:
                     torch.nn.utils.clip_grad_norm_(model.parameters(), args.max_grad_norm)
 
-                optimizer.step()
-                scheduler.step()  # Update learning rate schedule
-                model.zero_grad()
-                global_step += 1
+                # optimizer.step()
+                # scheduler.step()  # Update learning rate schedule
+                # model.zero_grad()
+                # global_step += 1
 
                 # Log metrics
                 if args.local_rank in [-1, 0] and args.logging_steps > 0 and global_step % args.logging_steps == 0:
@@ -572,6 +586,8 @@ def train(args, train_dataset, model, tokenizer):
                     tb_writer.add_scalar("stage3_loss", (tr_loss - logging_loss) / args.logging_steps, global_step)
                     logging_loss = tr_loss
         
+        with open("ma_full_loss_new_bs.json", "w") as outfile:
+            json.dump(dct, outfile, indent=2)
         # Save model checkpoint
         if args.local_rank in [-1, 0]:
             output_dir = os.path.join(args.output_dir, "checkpoint-epoch{}".format(epoch))
@@ -597,7 +613,8 @@ def train(args, train_dataset, model, tokenizer):
 def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
     prefix = args.prefix
     processor = SquadProcessor()
-    examples = processor._create_examples(inputs, 'dev')
+    examples = processor._create_examples(inputs, 'train')
+    # print(examples)
 
     #logger.info("Preprocessing {} examples".format(len(examples)))
     features, dataset = squad_convert_examples_to_features(
@@ -610,6 +627,7 @@ def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
         threads=args.threads,
     )
 
+    # print("GH",features, dataset)
     args.eval_batch_size = args.per_gpu_eval_batch_size * max(1, args.n_gpu)
 
     # Note that DistributedSampler samples randomly
@@ -627,24 +645,31 @@ def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
 
     all_results = []
     start_time = timeit.default_timer()
-
+    all_losses = []
     for batch in tqdm(eval_dataloader, desc="Evaluating"):
-        model.eval()
+        # model.eval()
+        model.train()
         batch = tuple(t.to(args.device) for t in batch)
-
+        # print("BATCH", batch, batch[0].shape)
         with torch.no_grad():
+            # print(batch[3])
             inputs = {
                 "input_ids": batch[0],
                 "attention_mask": batch[1],
                 "token_type_ids": batch[2],
+                "start_positions": batch[3],
+                "end_positions": batch[4]
             }
 
             example_indices = batch[3]
 
             outputs = model(**inputs)
+            all_losses.append(outputs[0].item())
+            # print("OUTPUT", outputs[0], outputs.start_logits.shape)
         for i, example_index in enumerate(example_indices):
             eval_feature = features[example_index.item()]
             unique_id = int(eval_feature.unique_id)
+            # print(unique_id)
 
             #output = [to_list(output[i]) for output in outputs]
             # print(outputs)
@@ -654,6 +679,8 @@ def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
             #end_logits = [to_list(out[i]) for out in outputs.end_logits]
             #start_logits, end_logits = output
             result = SquadResult(unique_id, outputs.start_logits[i,:].tolist(), outputs.end_logits[i,:].tolist())
+            result.loss = all_losses[-1]
+            # print("RESULT", result)
             # print(outputs.start_logits, "SEP", outputs.end_logits)
             all_results.append(result)
 
@@ -684,8 +711,9 @@ def evaluate_simplified(inputs, args, model, tokenizer, prefix=""):
         args.null_score_diff_threshold,
         tokenizer,
     )
- 
-    return predictions
+    
+    # print(predictions, all_losses)
+    return predictions, all_losses
 
 def _is_whitespace(c):
     if c == " " or c == "\t" or c == "\r" or c == "\n" or ord(c) == 0x202F:
@@ -763,6 +791,7 @@ class SquadProcessor(DataProcessor):
             #for qa in paragraph["qas"]:
             
             qas_id = entry["question_id"]
+            # print(qas_id)
             question_text = entry["question"]
             start_position_character = None
             answer_text = None
@@ -863,6 +892,7 @@ def load_and_cache_examples(args, tokenizer, evaluate=False, output_examples=Fal
             examples = processor.get_dev_examples(args.predict_file)
         else:
             examples = processor.get_train_examples(args.train_file)
+        print("HI", examples)
 
         features, dataset = squad_convert_examples_to_features(
             examples=examples,

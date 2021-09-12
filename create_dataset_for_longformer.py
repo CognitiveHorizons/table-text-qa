@@ -3,10 +3,16 @@ import sys
 from tqdm import tqdm
 
 sep_token = "[SEP]"
-val_sep = "[valsep]"
-q_r_sep = "[unused4]"
-col_sep = "[colsep]"
-p_r_sep = "[parasep]"
+val_sep = "<extra_id_0>"
+q_r_sep = "<extra_id_1>"
+col_sep = "<extra_id_2>"
+p_r_sep = "<extra_id_4>"
+
+# sep_token = "[SEP]"
+# val_sep = "[valsep]"
+# q_r_sep = "[unused4]"
+# col_sep = "[colsep]"
+# p_r_sep = "[parasep]"
 
 # sep_token = "[SEP]"
 # val_sep = "[unused3]"
@@ -40,7 +46,7 @@ def preprocess_data_for_longformer(data_path,in_lf_out_file,sp_token, test=False
     found_set = set([])
     for d in tqdm(data):
         new_data = {}
-        if test or d['label'] == 1: # or d['match_score'] != '-INF':
+        if test or d['label_new'] == 1: # or d['match_score'] != '-INF':
             if not test:
                 orig_answer = d['answer-text']
                 new_data['answer-text'] = orig_answer
@@ -53,6 +59,7 @@ def preprocess_data_for_longformer(data_path,in_lf_out_file,sp_token, test=False
             new_data['context'] = context
             new_data['title'] = d['table_id'].replace("_"," ")
             new_data['question'] = d['question']
+            # new_data['row_rank'] = d['row_rank']
             if prev_qid ==d['question_id']:
                 new_qid = d['question_id']+"_"+str(i)
                 prev_qid = d['question_id']

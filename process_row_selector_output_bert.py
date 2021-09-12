@@ -46,9 +46,10 @@ import json
 from utils.table_utils import fetch_table
 import sys
 
-p = json.load(open('/mnt/infonas/data/yashgupta/data/row_selector_output/qid_logits_bert_large_dev.json'))
+p = json.load(open('/mnt/infonas/data/yashgupta/data/new_bs_logits/logits_baseline/predicted_train_final.json'))
+
 def get_max_score_row(q_id):
-    return np.array(p[q_id]).argsort()[-5:]
+    return np.array(p[q_id]).argsort()[-1:]
 
 def preprocess_instance(d,test=False):
     p_d = {}
@@ -66,6 +67,7 @@ def preprocess_data(data_path,test):
     processed_data = []
     num = 0
     den = 0
+    nz_rr = 0
     for d in tqdm(data):
         # if d['label'] != 1:
         #     continue
@@ -104,6 +106,7 @@ def preprocess_data(data_path,test):
             table_row_passages_new.append(passages)
         # if (nm==0):
         #     print(xl)
+        rr = 0
         for r,pr,npr in zip(table_rows,table_row_passages,table_row_passages_new):
             npi={}
             npi['question_id'] = q_id
@@ -113,6 +116,8 @@ def preprocess_data(data_path,test):
             row_values = [v.lower() for v in r.values()]
             npi['table_passage_row_old'] = pr
             npi['table_passage_row'] = pr
+            npi['row_rank'] = rr
+            rr += 1
 
             if (len(npr)==0):
                 npr = ""
@@ -140,9 +145,18 @@ def preprocess_data(data_path,test):
                 # else:
                 #     npi['label'] = 1
             
+            if test:
+                processed_data.append(npi)
 
-            processed_data.append(npi)
-    print("total", den, "changed", num, len(processed_data))
+            if not test and npi['label'] == 1:
+                processed_data.append(npi)
+                if npi['row_rank'] !=0 :
+                    nz_rr += 1
+                    # print(npi['row_rank'])
+                break
+        # if (len(processed_data)==100):
+        #     break
+    print("total", den, "changed", num, "num samples final", len(processed_data), "ans not found in first row in", nz_rr)
     return processed_data
 
 

@@ -3,30 +3,30 @@ import re
 import collections
 import string
 import sys
-from sentence_transformers import SentenceTransformer, CrossEncoder, util
+# from sentence_transformers import SentenceTransformer, CrossEncoder, util
 import tqdm
 
 ################################################################
-model_name = 'msmarco-distilbert-base-tas-b'
-doc_retriever = SentenceTransformer(model_name)
+# model_name = 'msmarco-distilbert-base-tas-b'
+# doc_retriever = SentenceTransformer(model_name)
 
-def get_top_id(passages,query):
-    corpus_embeddings = doc_retriever.encode(passages, convert_to_tensor=True, show_progress_bar=False)
-    corpus_embeddings = util.normalize_embeddings(corpus_embeddings)
-    query_embeddings = doc_retriever.encode([query], convert_to_tensor=True)
-    query_embeddings = util.normalize_embeddings(query_embeddings)
-    hits = util.semantic_search(query_embeddings, corpus_embeddings, top_k=1)
-    return hits[0][0]['corpus_id']
+# def get_top_id(passages,query):
+#     corpus_embeddings = doc_retriever.encode(passages, convert_to_tensor=True, show_progress_bar=False)
+#     corpus_embeddings = util.normalize_embeddings(corpus_embeddings)
+#     query_embeddings = doc_retriever.encode([query], convert_to_tensor=True)
+#     query_embeddings = util.normalize_embeddings(query_embeddings)
+#     hits = util.semantic_search(query_embeddings, corpus_embeddings, top_k=1)
+#     return hits[0][0]['corpus_id']
 #################################################################
 import numpy as np
-p = json.load(open('/mnt/infonas/data/yashgupta/data/row_selector_output/qid_logits_bert_large_dev.json'))
+p = json.load(open('/mnt/infonas/data/yashgupta/data/pl_rs_logits/predictions_on_dev_Blarge_no_group.json'))
 def get_rs_score(q_id, rank):
     return np.sort(np.array(p[q_id]))[-5:][rank]
 
-q = json.load(open('/tmp/nbest_predictions_dev_top5.json'))
+q = json.load(open('/mnt/infonas/data/yashgupta/data/pl_processed_data/vk/no_group/pred_dev_top5_epoch1.json_nbest_predictions.json'))
 def get_rc_score(q_id, rank):
     nb = q[q_id+"_"+str(rank)][0]
-    return nb['start_logit'] + nb['end_logit']
+    return nb['start_logit'] + nb['end_logit'] 
     # return np.log(nb['probability'])
 #################################################################
 
@@ -75,10 +75,11 @@ def compute_f1(a_gold, a_pred):
     f1 = (2 * precision * recall) / (precision + recall)
     return f1
 
-def get_raw_scores(examples, reference):
+def get_raw_scores(examples, reference, cons):
     """
     Computes the exact and f1 scores from the examples and the model predictions
     """
+    print(cons)
     exact_scores = {}
     f1_scores = {}
     rnk_scores = {}
@@ -97,9 +98,11 @@ def get_raw_scores(examples, reference):
     for example in tqdm.tqdm(examples):
         qas_id = example['question_id'].split('_')[0]
         qas_rank = int(example['question_id'].split('_')[1])
-        # rcs = get_rc_score(qas_id, qas_rank)
-        # rss = get_rs_score(qas_id, qas_rank)
-        ts = example['rerank_score'] #3.2*rss + rcs
+        rcs = get_rc_score(qas_id, qas_rank)
+        rss = get_rs_score(qas_id, qas_rank)
+        # # ts = example['rerank_score'] #3.2*rss + rcs
+        ts = cons*rss + rcs
+        # ts = 3.2*rss + float(example['rc_score'])
         # print(example['question_id'], ts)
         gold_answers = [reference['reference'][qas_id]]
 
@@ -128,9 +131,12 @@ def get_raw_scores(examples, reference):
         #         if prediction == "" or len(ex['pred']) < len(prediction):
         #             prediction = ex['pred']
         # # print("best", prediction)
-
+        # if qas_id not in exact_scores.keys():
+        #     exact_scores[qas_id] = f1_scores[qas_id] = 0
+        # exact_scores[qas_id] = max(exact_scores[qas_id], es)
+        # f1_scores[qas_id] =  max(f1_scores[qas_id], f1s)
         exact_scores[qas_id] = es
-        f1_scores[qas_id] =  f1s
+        f1_scores[qas_id] = f1s
 
     qid_list = reference['reference'].keys()
     total = len(qid_list)
@@ -163,4 +169,7 @@ with open(sys.argv[1], 'r') as f:
 with open(sys.argv[2], 'r') as f:
     ref = json.load(f)
 
-print(get_raw_scores(data, ref))
+# lst_cons = [1.2, 2.2, 3.2, 4.2, 5.2, 6.2, 7.2, 8.2, 9.2, 10.2, 10.3, 10.4, 10.5, 10.6, 10.7, 10.8, 10.9, 11.0, 11.1, 11.2, 12.2]
+lst_cons = [3.2, 6.2]
+for c in lst_cons:
+    print(get_raw_scores(data, ref, c))
